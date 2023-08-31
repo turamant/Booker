@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel='stylesheet' href='/static/css/main.css'>
+    <title>Index book</title>
+</head>
+<body> 
+<h1>Глава 8. Обработка форм</h1>
+<p>В этом разделе книги мы сосредоточимся на предоставлении пользователям нашего веб-приложения возможности
+    создавать новые фрагменты с помощью HTML-формы, которая выглядит примерно так:
+</p>
+<p><img src="/static/images/picture8.1.png"/></p>
+<p>Рабочий процесс высокого уровня для обработки этой формы будет следовать стандартному
+    шаблону Post-Redirect-Get и выглядеть следующим образом:
+</p>
+<ol>
+    <li>Пользователю показывается пустая форма, когда он делает запрос GET к /snippet/create.
+    </li>
+    <li>Пользователь заполняет форму, и она отправляется на сервер с помощью POST-запроса к
+        /snippet/create.</li>
+    <li>Данные формы будут проверены нашим обработчиком createSnippet. Если есть какие-либо
+        ошибки проверки, форма будет отображаться повторно с
+        выделенными соответствующими полями формы. Если он пройдет наши проверки, данные для нового фрагмента будут добавлены
+        в базу данных, а затем мы перенаправим пользователя на «/snippet/:id».
+        </li>
+</ol>
+<p>В рамках этого вы узнаете:</p>
+<ul>
+    <li>Как анализировать и получать доступ к данным формы, отправленным в запросе POST.
+    </li>
+    <li>Некоторые методы выполнения общих проверок данных формы.
+    </li>
+    <li>Удобный шаблон для оповещения пользователя об ошибках проверки и повторного заполнения
+        полей формы ранее отправленными данными.</li>
+    <li>Как масштабировать проверку и поддерживать чистоту обработчиков, создав помощник формы в отдельном
+        повторно используемом пакете.</li>
+</ul>
+
+<h2>Глава 8.1.Настройка формы</h2>
+<p>Начнем с создания нового файла ui/html/create.page.tmpl для хранения HTML-кода формы…</p>
+<pre><code class="terminal">$ touch ui/html/create.page.tmpl</code></pre>
+<p>… а затем добавьте следующую разметку, используя тот же шаблон, который мы использовали ранее в книге:</p>
+<pre><code>File: ui/html/create.page.tmpl
+
+    {{template "base" .}}
+    
+    {{define "title"}}Create a New Snippet{{end}}
+    
+    {{define "main"}}
+    &lt;form action='/snippet/create' method='POST'&gt;
+        &lt;div&gt;
+            &lt;label&gt;Title:&lt;/label&gt;
+            &lt;input type='text' name='title'&gt;
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;label&gt;Content:&lt;/label&gt;
+            &lt;textarea name='content'&gt;&lt;/textarea&gt;
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;label&gt;Delete in:&lt;/label&gt;
+            &lt;input type='radio' name='expires' value='365' checked&gt; One Year
+            &lt;input type='radio' name='expires' value='7'&gt; One Week
+            &lt;input type='radio' name='expires' value='1'&gt; One Day
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;input type='submit' value='Publish snippet'&gt;
+        &lt;/div&gt;
+    &lt;/form&gt;
+    {{end}}</code></pre>
+<p>Пока в этом нет ничего особенного. Наш основной шаблон содержит
+    стандартную веб-форму, которая отправляет три значения формы: заголовок, содержимое и срок действия (количество
+    дней до истечения срока действия фрагмента). Единственное, на что действительно стоит обратить внимание, — это
+    атрибуты действия и метода формы — мы настроили их так, чтобы форма отправляла данные
+    по URL-адресу /snippet/create при отправке.</p>
+<p>Теперь давайте добавим новую ссылку «Создать фрагмент» на панель навигации нашего приложения, чтобы
+    щелкнув ее, пользователь перешел в эту новую форму.
+</p>
+<pre><code>File: ui/html/base.layout.tmpl
+
+    {{define "base"}}
+    &lt;!doctype html&gt;
+    &lt;html lang='en'&gt;
+        &lt;head&gt;
+            &lt;meta charset='utf-8'&gt;
+            &lt;title&gt;{{template "title" .}} - Snippetbox&lt;/title&gt;
+            &lt;link rel='stylesheet' href='/static/css/main.css'&gt;
+            &lt;link rel='shortcut icon' href='/static/img/favicon.ico' type='image/x-icon'&gt;
+            &lt;link rel='stylesheet' href='https://fonts.googleapis.com/css?family=Ubuntu+Mono:400,700'&gt;
+        &lt;/head&gt;
+        &lt;body&gt;
+            &lt;header&gt;
+                &lt;h1&gt;&lt;a href='/'&gt;Snippetbox&lt;/a&gt;&lt;/h1&gt;
+            &lt;/header&gt;
+            &lt;nav&gt;
+                &lt;a href='/'&gt;Home&lt;/a&gt;
+                &lt;!-- Add a link to the new form --&gt;
+                &lt;a href='/snippet/create'&gt;Create snippet&lt;/a&gt;
+            &lt;/nav&gt;
+            &lt;main&gt;
+                {{template "main" .}}
+            &lt;/main&gt;
+            {{template "footer" .}}
+            &lt;script src="/static/js/main.js" type="text/javascript"&gt;&lt;/script&gt;
+        &lt;/body&gt;
+    &lt;/html&gt;
+    {{end}}</code></pre>
+<p>И, наконец, нам нужно обновить обработчик createSnippetForm, чтобы он отображал нашу новую
+    страницу следующим образом:</p>
+<pre><code>File: cmd/web/handlers.go
+
+    package main
+    ...
+    
+    func (app *application) createSnippetForm(w http.ResponseWriter, r *http.Request) {
+        app.render(w, r, "create.page.tmpl", nil)
+    }
+    ...</code></pre>
+
+<p>На этом этапе вы можете запустить приложение и посетить
+    http://localhost:4000/snippet/create в своем браузере. Вы должны увидеть форму, которая
+    выглядит следующим образом:</p>
+<p><img src="/static/images/picture8.2.png"/></p>
+
+<h2>Глава 8.2. Анализ данных формы</h2>
+<p>Благодаря работе, которую мы проделали ранее в разделе маршрутизации RESTful, любые
+    запросы POST /snippets/create уже отправляются нашему
+    обработчику createSnippet. Теперь мы обновим этот обработчик для обработки и использования данных формы при ее
+    отправке.</p>
+<p>На высоком уровне мы можем разбить это на два отдельных этапа.
+</p>
+<ol>
+    <li>Во-первых, нам нужно использовать метод r.ParseForm() для разбора тела запроса. Это проверяет
+        , правильно ли сформировано тело запроса, а затем сохраняет данные формы в
+        карте запроса r.PostForm. Если при синтаксическом анализе тела возникнут какие-либо ошибки (например,
+        тело отсутствует или оно слишком велико для обработки), будет возвращена ошибка. r.ParseForm()
+        метод также является идемпотентным; его можно безопасно вызывать несколько раз по одному и тому же запросу
+        без каких-либо побочных эффектов.</li>
+    <li>Затем мы можем получить данные формы, содержащиеся в r.PostForm, с помощью
+        метода r.PostForm.Get(). Например, мы можем получить значение поля title
+        с помощью r.PostForm.Get("title"). Если в форме нет подходящего имени поля, будет
+        возвращена пустая строка "", подобно тому, как параметры строки запроса работали
+        ранее в книге.</li>
+</ol>
+<p>Откройте файл cmd/web/handlers.go и обновите его, включив в него следующий код:
+</p> 
+<pre><code>File: cmd/web/handlers.go
+
+    package main
+    ...
+
+    func (app *application) createSnippet(w http.ResponseWriter, r *http.Request) {
+        // Сначала мы вызываем r.ParseForm(), который добавляет любые данные из тела запроса POST
+        // на карту r.PostForm. Это также работает таким же образом для
+        // запросов PUT и PATCH . Если есть какие-либо ошибки, мы используем наш помощник 
+        // app.ClientError, чтобы отправить пользователю ответ 400 Bad Request.
+        err := r.ParseForm()
+        if err != nil {
+            app.clientError(w, http.StatusBadRequest)
+            return
+        }
+
+        // Используйте метод r.PostForm.Get() для извлечения соответствующих полей данных
+        // из карты r.PostForm.
+        title := r.PostForm.Get("title")
+        content := r.PostForm.Get("content")
+        expires := r.PostForm.Get("expires")
+        
+        // Создаем новую запись сниппета в базе данных, используя данные формы.
+        id, err := app.snippets.Insert(title, content, expires)
+        if err != nil {
+            app.serverError(w, err)
+            return
+        }
+        http.Redirect(w, r, fmt.Sprintf("/snippet/%d", id), http.StatusSeeOther)
+    }</code></pre>
+<p>Хорошо, давайте попробуем! Перезапустите приложение и попробуйте заполнить форму с заголовком
+    и содержанием сниппета, примерно так</p>
+<p><img src="/static/images/picture8.3.png"/></p>
+<p>А затем отправить форму. Если все сработало, вы должны быть перенаправлены на страницу,
+    отображающую ваш новый фрагмент, например:</p>
+<p><img src="/static/images/picture8.4.png"/></p>
+
+<h3>Дополнительная информация</h3>
+<h4>Карта r.Form</h4>
+<p>В приведенном выше коде мы получили доступ к значениям формы через карту r.PostForm. Но альтернативный
+    подход заключается в использовании карты r.Form (немного другой).
+</p>    
+<p>Карта r.PostForm заполняется только для запросов POST, PATCH и PUT и содержит
+ данные формы из тела запроса.</p>
+<p>Напротив, карта r.Form заполняется для всех запросов (независимо от их
+    метода HTTP) и содержит данные формы из любого тела запроса и любые
+    параметры строки запроса. Итак, если бы наша форма была отправлена ​​на /snippet/create?foo=bar, мы могли бы также получить
+    значение параметра foo, вызвав r.Form.Get("foo"). Обратите внимание, что в случае возникновения
+    конфликт, значение тела запроса будет иметь приоритет над параметром строки запроса.
+    </p>
+<p>Использование карты r.Form может быть полезно, если ваше приложение отправляет данные в HTML-форме и в
+    URL-адресе, или у вас есть приложение, которое не зависит от того, как передаются параметры. Но
+    в нашем случае эти вещи неприменимы. Мы ожидаем, что данные нашей формы будут отправлены
+    только в теле запроса, поэтому для нас разумно получить к ним доступ через r.PostForm.
+</p>
+<h4>Методы FormValue и PostFormValue</h4>
+<p>Пакет net/http также предоставляет методы r.FormValue() и r.PostFormValue().
+    По сути, это функции быстрого доступа, которые вызывают для вас r.ParseForm(), а затем извлекают
+    соответствующее значение поля из r.Form или r.PostForm соответственно.
+    </p>
+<p>Я рекомендую избегать этих сокращений, потому что они молча игнорируют любые ошибки, возвращаемые
+    r.ParseForm(). Это не идеально — это означает, что наше приложение может сталкиваться с ошибками
+    и не работать для пользователей, но нет механизма обратной связи, чтобы сообщить им об этом.
+    </p>
+<h4>Поля с несколькими значениями</h4>
+<p>Строго говоря, метод r.PostForm.Get(), который мы использовали выше, возвращает только первое
+    значение для определенного поля формы. Это означает, что вы не можете использовать его с полями формы, которые
+    могут отправлять несколько значений, например группу флажков.</p>
+
+<pre><code>&lt;input type="checkbox" name="items" value="foo"&gt; Foo
+    &lt;input type="checkbox" name="items" value="bar"&gt; Bar
+    &lt;input type="checkbox" name="items" value="baz"&gt; Baz</code></pre>
+<p>В этом случае вам нужно будет работать непосредственно с картой r.PostForm. Базовым типом
+    карты r.PostForm является url.Values, который, в свою очередь, имеет базовый тип
+    map[string][]string. Таким образом, для полей с несколькими значениями вы можете перебирать базовую
+    карту, чтобы получить к ним доступ следующим образом:</p>
+
+<pre><code>for i, item := range r.PostForm["items"] {
+    fmt.Fprintf(w, "%d: Item %s\n", i, item)
+    }</code></pre>
+
+<h4>Размер формы</h4>
+<p>Если вы не отправляете составные данные (т. е. ваша форма не имеет
+    атрибута enctype="multipart/form-data"), размер тела запросов POST, PUT и PATCH ограничен
+    10 МБ. Если это превышено, то r.ParseForm() вернет ошибку.
+    </p>
+<p>Если вы хотите изменить это ограничение, вы можете использовать функцию http.MaxBytesReader() следующим образом:
+</p>
+
+<pre><code>
+    // Ограничение размера тела запроса до 4096 байт
+    r.Body = http.MaxBytesReader(w, r.Body, 4096)
+    err := r.ParseForm()
+    if err != nil {
+        http.Error(w, "Bad Request", http.StatusBadRequest)
+        return
+    }</code></pre>
+<p>С этим кодом во время r.ParseForm() будут прочитаны только первые 4096 байт тела запроса
+    . Попытка чтения сверх этого предела приведет к тому, что MaxBytesReader вернет
+    ошибку, которая впоследствии будет обнаружена с помощью r.ParseForm().
+    </p>
+<p>Кроме того, если предел достигнут, MaxBytesReader устанавливает флаг в http.ResponseWriter,
+    который указывает серверу закрыть базовое TCP-соединение.
+</p>
+
+<h2>Глава 8.3. Проверка данных</h2>
+<p>Прямо сейчас в нашем коде есть вопиющая проблема: мы
+    никоим образом не проверяем (ненадежный) пользовательский ввод из формы. Мы должны сделать это, чтобы убедиться, что данные формы присутствуют,
+    имеют правильный тип и соответствуют всем бизнес-правилам, которые у нас есть.
+    </p>
+<p>Конкретно для этой формы мы хотим:</p>
+<ul>
+    <li>Проверить, что поля title, content и expires не пусты.
+    </li>
+    <li>Убедитесь, что длина поля заголовка не превышает 100 символов.
+    </li>
+    <li>Убедитесь, что значение срока действия соответствует одному из наших допустимых значений (1, 7 или 365 дней).
+    </li>
+</ul>
+<p>Все эти проверки довольно просто реализовать с помощью некоторых операторов if и
+    различных функций в строках Go и пакетах unicode/utf8.
+    </p>
+<p>Откройте файл handlers.go и обновите обработчик createSnippet, включив в него
+    соответствующие правила проверки, например:
+    </p>
+
+<pre><code>File: cmd/web/handlers.go
+
+    package main
+
+    import (
+        "errors"
+        "fmt"
+        "net/http"
+        "strconv"
+        "strings" // Новый импорт
+        "unicode/utf8" // Новый импорт
+        "turamant.net/snippetbox/pkg/models"
+    )
+    ...
+    func (app *application) createSnippet(w http.ResponseWriter, r *http.Request) {
+        err := r.ParseForm()
+        if err != nil {
+            app.clientError(w, http.StatusBadRequest)
+            return
+        }
+        title := r.PostForm.Get("title")
+        content := r.PostForm.Get("content")
+        expires := r.PostForm.Get("expires")
+
+        // Инициализировать карту для хранения любых ошибок проверки.
+        errors := make(map[string]string)
+
+        // Проверяем, что поле title не пусто и не превышает 100 символов 
+        // в длину. Если ни одна из этих проверок не проходит, добавьте сообщение на
+        // карту ошибок, используя имя поля в качестве ключа.
+        if strings.TrimSpace(title) == "" {
+            errors["title"] = "This field cannot be blank"
+        } else if utf8.RuneCountInString(title) > 100 {
+            errors["title"] = "This field is too long (maximum is 100 characters)"
+        }
+
+        // Убедитесь, что поле Content не пустое.
+        if strings.TrimSpace(content) == "" {
+            errors["content"] = "This field cannot be blank"
+        }
+
+        // Проверяем, что поле expires не пусто и соответствует одному из разрешенных
+        // значений ("1", "7" или "365").
+        if strings.TrimSpace(expires) == "" {
+            errors["expires"] = "This field cannot be blank"
+        } else if expires != "365" && expires != "7" && expires != "1" {
+            errors["expires"] = "This field is invalid"
+        }
+
+        // Если есть какие-либо ошибки, сбрасываем их в обычный текстовый HTTP-ответ и возвращаем
+        // из обработчика.
+        if len(errors) > 0 {
+            fmt.Fprint(w, errors)
+            return
+        }
+        id, err := app.snippets.Insert(title, content, expires)
+        if err != nil {
+            app.serverError(w, err)
+            return
+        }
+        http.Redirect(w, r, fmt.Sprintf("/snippet/%d", id), http.StatusSeeOther)
+    }</code></pre>
+
+<p class="note">Примечание. Когда мы проверяем длину поля заголовка, мы используем
+    функцию utf8.RuneCount(), а не функцию Go len(). Это потому, что мы хотим подсчитать количество
+    символов в заголовке, а не количество байтов. Чтобы проиллюстрировать разницу,
+    строка «Zoë» состоит из 3 символов, но имеет длину 4 байта из-за
+    символа ë с умлаутом.</p>
+<p>Хорошо, давайте попробуем! Перезапустите приложение и попробуйте отправить форму со слишком длинным заголовком фрагмента и пустым полем содержимого, что-то вроде этого…</p>
+<p><img src="/static/images/picture8.5.png"/></p>
+<p>И вы должны увидеть дамп соответствующих сообщений об ошибках проверки, например:</p>
+<p><img src="/static/images/picture8.6.png"/></p>
+<p class="note">Совет. В этом сообщении блога вы можете найти множество шаблонов кода для обработки и проверки различных
+    типов входных данных.</p>
+
+<h3>Отображение ошибок проверки и повторное заполнение полей</h3>
+<p>Теперь, когда обработчик createSnippet проверяет данные, следующим этапом является
+    корректное управление этими ошибками проверки.</p>
+<p>Если есть какие-либо ошибки проверки, мы хотим повторно отобразить форму, выделив поля,
+    которые не прошли проверку, и автоматически повторно заполнив все ранее отправленные данные.
+</p>
+<p>Для этого давайте начнем с добавления двух новых полей в нашу структуру templateData: FormErrors для
+    хранения любых ошибок проверки и FormData для хранения любых ранее отправленных данных, например:
+</p>
+<pre>
+    <code>File: cmd/web/templates.go
+
+        package main
+        
+        import (
+            "html/template"
+            "net/url" // New import
+            "path/filepath"
+            "time"
+            "turamant.net/snippetbox/pkg/models"
+        )
+
+        // Добавляем поля FormData и FormErrors в структуру templateData.
+        type templateData struct {
+            CurrentYear int
+            FormData url.Values
+            FormErrors map[string]string
+            Snippet *models.Snippet
+            Snippets []*models.Snippet
+        }
+        ...</code>
+</pre>
+<p class="note">Примечание. В этой структуре поле FormData имеет тип url.Values, который является тем же
+    базовым типом, что и карта r.PostForm, содержащая данные, отправленные в тексте запроса.</p>
+
+<p>Теперь давайте снова обновим обработчик createSnippet, чтобы при
+    возникновении каких-либо ошибок проверки форма отображалась повторно с соответствующими ошибками и данными формы, переданными в
+    шаблон. Вот так:</p>
+<pre><code>File: cmd/web/handlers.go
+
+    package main
+    ...
+
+    func (app *application) createSnippet(w http.ResponseWriter, r *http.Request) {
+        err := r.ParseForm()
+        if err != nil {
+            app.clientError(w, http.StatusBadRequest)
+            return
+        }
+        title := r.PostForm.Get("title")
+        content := r.PostForm.Get("content")
+        expires := r.PostForm.Get("expires")
+        errors := make(map[string]string)
+        if strings.TrimSpace(title) == "" {
+            errors["title"] = "This field cannot be blank"
+        } else if utf8.RuneCountInString(title) > 100 {
+            errors["title"] = "This field is too long (maximum is 100 characters)"
+        }
+        if strings.TrimSpace(content) == "" {
+            errors["content"] = "This field cannot be blank"
+        }
+        if strings.TrimSpace(expires) == "" {
+            errors["expires"] = "This field cannot be blank"
+        } else if expires != "365" && expires != "7" && expires != "1" {
+            errors["expires"] = "This field is invalid"
+        }
+
+        // Если есть какие-либо ошибки проверки, повторно отобразите шаблон create.page.tmpl 
+        // с передачей ошибок проверки и ранее отправленных данных r.PostForm.
+        if len(errors) > 0 {
+            app.render(w, r, "create.page.tmpl", &templateData{
+                FormErrors: errors,
+                FormData: r.PostForm,
+            })
+            return
+        }
+        id, err := app.snippets.Insert(title, content, expires)
+        if err != nil {
+            app.serverError(w, err)
+            return
+        }
+        http.Redirect(w, r, fmt.Sprintf("/snippet/%d", id), http.StatusSeeOther)
+    }</code></pre>
+<p>Итак, теперь, когда есть какие-либо ошибки проверки, мы повторно отображаем
+    шаблон create.page.tmpl, передавая карту ошибок в поле FormErrors данных шаблона и
+    передавая ранее отправленные данные в поле FormData.</p>
+<p>Итак, как мы будем отображать эти ошибки в шаблоне?</p>
+<p>Базовым типом поля FormErrors является строка map[string] (с ключом по
+    имени поля формы). А для карт можно получить доступ к значению данного ключа, просто поставив
+    точку после имени ключа. Например, чтобы отобразить любое сообщение об ошибке для поля заголовка, мы можем
+    использовать тег {{.FormErrors.title}} в нашем шаблоне. Важно отметить, что,
+    в отличие от полей структуры, имена ключей сопоставления не должны быть написаны с заглавной буквы для доступа к ним из
+    шаблон.</p>
+<p>Базовым типом FormData является url.Values, и мы можем использовать его метод Get() для
+    получения значения для поля, как мы это делали в нашем обработчике createSnippet. Например, чтобы
+    отобразить ранее отправленное значение для поля заголовка, мы можем использовать тег
+    {{.FormData.Get "title"}} в нашем шаблоне.</p>
+<p>Имея это в виду, давайте обновим файл create.page.tmpl, чтобы отобразить данные и
+    сообщения об ошибках проверки для каждого поля, если они существуют:</p>
+
+<pre><code>File: ui/html/create.page.tmpl
+
+    {{template "base" .}}
+    
+    {{define "title"}}Create a New Snippet{{end}}
+    
+    {{define "main"}}
+    &lt;form action='/snippet/create' method='POST'&gt;
+        &lt;div&gt;
+            &lt;label&gt;Title:&lt;/label&gt;
+            {{with .FormErrors.title}}
+                &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+            {{end}}
+            &lt;input type='text' name='title' value='{{.FormData.Get "title"}}'&gt;
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;label&gt;Content:&lt;/label&gt;
+            {{with .FormErrors.content}}
+                &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+            {{end}}
+            &lt;textarea name='content'&gt;{{.FormData.Get "content"}}&lt;/textarea&gt;
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;label&gt;Delete in:&lt;/label&gt;
+            {{with .FormErrors.expires}}
+                &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+            {{end}}
+            {{$exp := or (.FormData.Get "expires") "365"}}
+            &lt;input type='radio' name='expires' value='365' {{if (eq $exp "365")}}checked{{end}}&gt; One Year
+            &lt;input type='radio' name='expires' value='7' {{if (eq $exp "7")}}checked{{end}}&gt; One Week
+            &lt;input type='radio' name='expires' value='1' {{if (eq $exp "1")}}checked{{end}}&gt; One Day
+        &lt;/div&gt;
+        &lt;div&gt;
+            &lt;input type='submit' value='Publish snippet'&gt;
+        &lt;/div&gt;
+    &lt;/form&gt;
+    {{end}}</code></pre>
+
+<p>Надеюсь, эта разметка и наше использование действия {{with}} для управления отображением динамических
+    данных в целом понятны — это просто использование методов, которые мы уже видели и обсуждали
+    ранее в книге.</p>
+<p>Но давайте поговорим о строке:</p>
+<pre><code>{{$exp := or (.FormData.Get "expires") "365"}}</code></pre>
+<p>По сути, это создает новую переменную шаблона $exp, которая использует
+    функцию шаблона или для установки переменной в значение, полученное с помощью .FormData.Get «expires», или, если оно
+    пусто, вместо этого используется значение по умолчанию «365».
+</p>
+<p>Обратите внимание, как мы использовали круглые скобки () для группировки метода .FormData.Get и его
+    параметров, чтобы передать его вывод действию или?
+</p>
+<p>Затем мы используем эту переменную в сочетании с функцией eq, чтобы добавить проверенный атрибут
+    к соответствующему переключателю, например:
+</p>
+<pre><code>{{if (eq $exp "365")}}checked{{end}}</code></pre>
+
+<p>В любом случае, перезапустите приложение и посетите http://localhost:4000/snippet/create в своем
+    браузере.</p>
+<p>Попробуйте добавить некоторый контент и изменить срок действия по умолчанию, но оставьте поле заголовка пустым,
+    например:
+</p>
+<p><img src="/static/images/picture8.7.png"/></p>
+<p>После отправки вы должны снова увидеть форму с правильно заполненным
+    содержимым и параметром истечения срока действия, а также сообщением об ошибке «Это поле не может быть пустым» рядом с
+    полем заголовка:</p>
+<p><img src="/static/images/picture8.8.png"/></p>
+<p>Прежде чем мы продолжим, не стесняйтесь потратить некоторое время на игру с формой и
+    правилами проверки, пока вы не будете уверены, что все работает так, как вы ожидаете.</p>
+
+<h2>Глава 8.4. Масштабирование проверки данных</h2>
+<p>Итак, теперь мы находимся в положении, когда наше приложение проверяет данные формы
+    в соответствии с нашими бизнес-правилами и изящно обрабатывает любые ошибки проверки. Это здорово,
+    но для этого пришлось приложить немало усилий.</p>
+<p>И хотя подход, который мы выбрали, подходит для одноразового использования, если ваше приложение имеет много форм
+    , вы можете получить довольно много повторений в своем коде и правилах проверки. Не
+    говоря уже о том, что написание кода для проверки форм — не самый увлекательный способ провести
+    время.</p>
+<p>Давайте решим эту проблему, создав пакет форм, чтобы абстрагироваться от части этого поведения и сократить
+    шаблонный код в нашем обработчике. На самом деле мы не будем менять работу приложения.
+    вообще для пользователя; это просто рефакторинг нашей кодовой базы.
+    </p>
+<p>Мы начнем с создания новой папки pkg/forms в каталоге проекта и добавления двух файлов
+    — forms.go и errors.go — вот так:</p>
+<pre><code class="terminal">$ cd $HOME/code/snippetbox
+    $ mkdir pkg/forms
+    $ touch pkg/forms/errors.go
+    $ touch pkg/forms/form.go</code></pre>
+
+<p><img src="/static/images/picture8.9.png"/></p>
+<p>Как только это будет сделано, откройте файл errors.go и создайте новый тип ошибок, который мы будем использовать
+    для хранения сообщений об ошибках проверки для форм, например:</p>
+<pre><code>File: pkg/forms/errors.go
+
+    package forms
+
+    // Определяем новый тип ошибок, который мы будем использовать для хранения
+    // сообщений об ошибках проверки для форм. Имя поля формы будет использоваться
+    // как ключ в этой карте.
+    type errors map[string][]string
+
+    
+    // Реализовать метод Add() для добавления на карту сообщений об ошибках для заданного поля.
+    func (e errors) Add(field, message string) {
+        e[field] = append(e[field], message)
+    }
+
+    // Реализовать метод Get() для извлечения первого сообщения об ошибке для заданного
+    // поля с карты.
+    func (e errors) Get(field string) string {
+        es := e[field]
+        if len(es) == 0 {
+            return ""
+        }
+        return es[0]
+    }</code></pre>
+<p>А затем в файле form.go добавьте следующий код:</p>
+<pre><code>File: pkg/forms/form.go
+
+    package forms
+    
+    import (
+        "fmt"
+        "net/url"
+        "strings"
+        "unicode/utf8"
+    )
+
+    // Создайте пользовательскую структуру Form, которая анонимно встраивает объект url.Values
+​   ​// (для хранения данных формы) и поле Errors для хранения любых ошибок проверки
+   // для данных формы.
+    type Form struct {
+        url.Values
+        Errors errors
+    }
+
+    // Определяем новую функцию для инициализации пользовательской структуры формы. Обратите внимание, что
+    // в качестве параметра используются данные формы?
+    func New(data url.Values) *Form {
+        return &Form{
+            data,
+            errors(map[string][]string{}),
+        }
+    }
+
+    // Реализовать метод Required для проверки того, что определенные поля в форме
+    // данных присутствуют и не пусты. Если какие-либо поля не прошли эту проверку, добавьте 
+    // соответствующее сообщение в форму ошибок.
+    func (f *Form) Required(fields ...string) {
+        for _, field := range fields {
+            value := f.Get(field)
+            if strings.TrimSpace(value) == "" {
+                f.Errors.Add(field, "Это поле не может быть пустым")
+            }
+        }
+    }
+
+    // Реализовать метод MaxLength для проверки того, что конкретное поле в форме
+    // содержит максимальное количество символов. Если проверка не пройдена, добавьте
+    // соответствующее сообщение в форму ошибок.
+    func (f *Form) MaxLength(field string, d int) {
+        value := f.Get(field)
+        if value == "" {
+            return
+        }
+        if utf8.RuneCountInString(value) > d {
+            f.Errors.Add(field, fmt.Sprintf("Это поле слишком длинное (maximum is %d characters)", d))
+        }
+    }
+
+    // Реализовать метод PermittedValues ​​для проверки того, 
+    // что конкретное поле в форме соответствует одному из набора определенных разрешенных значений.
+    // Если проверка не пройдена, то добавляем соответствующее сообщение в форму ошибок.
+    func (f *Form) PermittedValues(field string, opts ...string) {
+        value := f.Get(field)
+        if value == "" {
+            return
+        }
+        for _, opt := range opts {
+            if value == opt {
+                return
+            }
+        }
+        f.Errors.Add(field, "This field is invalid")
+    }
+    
+    // Реализовать метод Valid, который возвращает true, если ошибок нет.
+    func (f *Form) Valid() bool {
+        return len(f.Errors) == 0
+    }</code></pre>
+
+<p>Следующим шагом является обновление структуры templateData, чтобы мы могли передать эту новую
+    структуру forms.Form в наши шаблоны:</p>
+<pre><code>File: cmd/web/templates.go
+
+    package main
+
+    import (
+        "html/template"
+        "path/filepath"
+        "time"
+        "turamant.net/snippetbox/pkg/forms" // New import
+        "turamant.net/snippetbox/pkg/models"
+    )
+
+    // Обновите поля templateData, удалив отдельные поля FormData и 
+    // FormErrors и заменив их одним полем формы.
+    type templateData struct {
+        CurrentYear int
+        Form *forms.Form
+        Snippet *models.Snippet
+        Snippets []*models.Snippet
+    }
+    ...</code></pre>
+
+<p>А теперь о вознаграждении… Откройте файл handlers.go и обновите его, чтобы использовать
+    только что созданные нами структуру Forms.Form и методы проверки, например:</p>
+<pre><code>File: cmd/web/handlers
+
+    package main
+    
+    import (
+        "fmt"
+        "net/http"
+        "strconv"
+        "turamant.net/snippetbox/pkg/forms" // Новый импорт
+        "turamant.net/snippetbox/pkg/models"
+    )
+    ...
+    func (app *application) createSnippetForm(w http.ResponseWriter, r *http.Request) {
+        app.render(w, r, "create.page.tmpl", &templateData{
+            // Передаем новый пустой объект forms.Form в шаблон.
+            Form: forms.New(nil),
+        })
+    }
+
+    func (app *application) createSnippet(w http.ResponseWriter, r *http.Request) {
+        err := r.ParseForm()
+        if err != nil {
+            app.clientError(w, http.StatusBadRequest)
+            return
+    }
+
+    // Создайте новую структуру forms.Form, содержащую данные, отправленные
+    // из формы, а затем используйте методы проверки для проверки содержимого.
+    form := forms.New(r.PostForm)
+    form.Required("title", "content", "expires")
+    form.MaxLength("title", 100)
+    form.PermittedValues("expires", "365", "7", "1")
+
+    // Если форма недействительна, повторно отобразить шаблон, переданный
+    // в объект form.Form, в качестве данных.
+    if !form.Valid() {
+        app.render(w, r, "create.page.tmpl", &templateData{Form: form})
+        return
+    }
+
+    // Поскольку данные формы (с типом url.Values) были анонимно встроены
+    // в структуру form.Form, мы можем использовать метод Get() для получения
+    // проверенного значения для определенного поля формы.
+    id, err := app.snippets.Insert(form.Get("title"), form.Get("content"), form.Get("expires"))
+    
+    if err != nil {
+        app.serverError(w, err)
+        return
+    }
+
+    http.Redirect(w, r, fmt.Sprintf("/snippet/%d", id), http.StatusSeeOther)
+    }</code></pre>
+<p>Осталось только обновить файл create.page.tmpl, чтобы использовать данные, содержащиеся в
+    новой структуре form.Form, например так:</p>
+    <pre><code>File: ui/html/create.page.tmpl
+
+        {{template "base" .}}
+        
+        {{define "title"}}Create a New Snippet{{end}}
+        
+        {{define "main"}}
+        &lt;form action='/snippet/create' method='POST'&gt;
+            &lt;div&gt;
+                &lt;label&gt;Title:&lt;/label&gt;
+                {{with .Errors.Get "title"}}
+                    &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+                {{end}}
+                &lt;input type='text' name='title' value='{{.FormData.Get "title"}}'&gt;
+            &lt;/div&gt;
+            &lt;div&gt;
+                &lt;label&gt;Content:&lt;/label&gt;
+                {{with .ErrorsGet "content"}}
+                    &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+                {{end}}
+                &lt;textarea name='content'&gt;{{.Get "content"}}&lt;/textarea&gt;
+            &lt;/div&gt;
+            &lt;div&gt;
+                &lt;label&gt;Delete in:&lt;/label&gt;
+                {{with .Errors.Get "expires"}}
+                    &lt;label class='error'&gt;{{.}}&lt;/label&gt;
+                {{end}}
+                {{$exp := or (.Get "expires") "365"}}
+                &lt;input type='radio' name='expires' value='365' {{if (eq $exp "365")}}checked{{end}}&gt; One Year
+                &lt;input type='radio' name='expires' value='7' {{if (eq $exp "7")}}checked{{end}}&gt; One Week
+                &lt;input type='radio' name='expires' value='1' {{if (eq $exp "1")}}checked{{end}}&gt; One Day
+            &lt;/div&gt;
+            &lt;div&gt;
+                &lt;input type='submit' value='Publish snippet'&gt;
+            &lt;/div&gt;
+        &lt;/form&gt;
+        {{end}}</code></pre>
+    
+<p>Всё складывается прекрасно.</p>
+<p>Теперь у нас есть пакет форм с правилами проверки и логикой, которые можно повторно использовать в
+    нашем приложении. Его также можно легко расширить, включив дополнительные правила в будущем
+    (что мы и сделаем позже в этой книге). И данные формы, и ошибки аккуратно инкапсулированы в
+    один объект forms.Form, который мы можем легко передать в наши шаблоны, и он предоставляет
+    простой и согласованный API для извлечения и отображения как данных формы, так и любых
+    сообщений об ошибках.</p>
+<p>Перезапустите приложение сейчас. Если все в порядке, вы должны обнаружить, что форма и
+    правила проверки работают правильно, как и раньше.</p>
+
+
+<p>Конец главы 8.</p>
+
+</body>
+</html>
