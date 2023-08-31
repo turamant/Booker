@@ -5,12 +5,12 @@ import (
 	"net/http"
 )
 
-func (app *application) homeHandler(responce http.ResponseWriter, request *http.Request){
-	if request.URL.Path !="/" {
+func (app *application) homeHandler(responce http.ResponseWriter, request *http.Request) {
+	if request.URL.Path != "/" {
 		app.notFound(responce)
 		return
 	}
-	files := []string {
+	files := []string{
 		"./ui/html/index.html",
 		"./ui/html/base.html",
 		"./ui/html/footer.html",
@@ -20,14 +20,14 @@ func (app *application) homeHandler(responce http.ResponseWriter, request *http.
 		app.serverError(responce, err)
 		return
 	}
-	err = ts.Execute(responce, nil) 
+	err = ts.Execute(responce, nil)
 	if err != nil {
 		app.serverError(responce, err)
 	}
 
 }
 
-func (app *application) createHandler(responce http.ResponseWriter, request *http.Request){
+func (app *application) createHandler(responce http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		responce.Header().Set("allow", http.MethodPost)
 		responce.Header().Set("Content-Type", "application/json")
